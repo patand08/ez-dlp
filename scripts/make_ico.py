@@ -17,7 +17,9 @@ def _dib(im: Image.Image) -> bytes:
     im = im.convert("RGBA")
     width, height = im.size
     flipped = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
-    xor = flipped.tobytes()
+    xor = bytearray(flipped.tobytes())
+    for i in range(0, len(xor), 4):
+        xor[i], xor[i + 2] = xor[i + 2], xor[i]
     header = struct.pack(
         "<IIIHHIIIIII",
         40,

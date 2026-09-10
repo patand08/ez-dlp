@@ -44,7 +44,7 @@ Those binaries are **not** stored in git (GitHub file size limits).
    - end only → from `00:00` to that time
    - both → that clip only
    - invalid values → full video
-4. Click **Download MP4** or **Download MP3**.
+4. Click **Download MP4**, **Download MP3**, or **Thumbnail** (saves a PNG; Start/End are ignored).
 
 ## Cookies (age-restricted videos)
 
@@ -112,7 +112,7 @@ Esses binários **não** entram no git (limite de tamanho do GitHub).
    - só fim → de `00:00` até esse ponto
    - os dois → só o trecho
    - valor inválido → vídeo inteiro
-4. Clique em **Download MP4** ou **Download MP3**.
+4. Clique em **Download MP4**, **Download MP3** ou **Thumbnail** (salva um PNG; Start/End são ignorados).
 
 ## Cookies (vídeos com restrição de idade)
 

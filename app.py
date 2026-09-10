@@ -1,4 +1,4 @@
-"""EZ-DLP — local Windows app to download MP4 and MP3."""
+"""EZ-DLP — local Windows app to download MP4, MP3, and thumbnails."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox
+from urllib.parse import parse_qs, urlparse
 import tkinter as tk
 
 YTDLP_URLS = (
@@ -27,6 +28,10 @@ FFMPEG_ZIPS = (
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
 )
 UA = "Mozilla/5.0 EZ-DLP/1.0"
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 BG = "#111318"
 SURFACE = "#1a1d24"
@@ -37,6 +42,8 @@ MP4 = "#c62828"
 MP4_HOVER = "#e53935"
 MP3 = "#1565c0"
 MP3_HOVER = "#1e88e5"
+THUMB = "#00695c"
+THUMB_HOVER = "#00897b"
 BTN_FG = "#ffffff"
 ENTRY_BG = "#0d0f14"
 LOG_BG = "#0d0f14"
@@ -156,6 +163,109 @@ def _clear_ytdlp_cache(ytdlp: Path) -> None:
 def is_youtube(url: str) -> bool:
     text = url.lower()
     return "youtube.com" in text or "youtu.be" in text or "youtube-nocookie.com" in text
+
+
+def youtube_id(url: str) -> str | None:
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host == "youtu.be":
+        vid = parsed.path.strip("/").split("/")[0]
+        return vid or None
+    if host in ("youtube.com", "m.youtube.com", "music.youtube.com", "youtube-nocookie.com"):
+        vid = (parse_qs(parsed.query).get("v") or [""])[0]
+        if vid:
+            return vid
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) >= 2 and parts[0] in ("shorts", "embed", "live"):
+            return parts[1] or None
+    return None
+
+
+def _safe_filename(name: str) -> str:
+    cleaned = "".join("_" if c in '<>:"/\\|?*' else c for c in name).strip(" .")
+    return (cleaned[:180] or "thumbnail")
+
+
+def youtube_oembed_title(video_id: str) -> str | None:
+    api = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+    try:
+        request = urllib.request.Request(api, headers={"User-Agent": BROWSER_UA})
+        with urllib.request.urlopen(request, timeout=5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        title = str(data.get("title") or "").strip()
+        return title or None
+    except Exception:
+        return None
+
+
+def _download_small(url: str, dest: Path, timeout: int = 6) -> int:
+    request = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = response.read()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    return len(data)
+
+
+def fetch_youtube_thumb_image(video_id: str, dest: Path) -> bool:
+    candidates = (
+        ("maxresdefault.jpg", 8000),
+        ("sddefault.jpg", 6000),
+        ("hqdefault.jpg", 4000),
+        ("mqdefault.jpg", 2500),
+    )
+    for name, min_bytes in candidates:
+        url = f"https://i.ytimg.com/vi/{video_id}/{name}"
+        try:
+            size = _download_small(url, dest)
+            if size >= min_bytes:
+                return True
+        except Exception:
+            pass
+        if dest.exists():
+            dest.unlink(missing_ok=True)
+    return False
+
+
+def convert_image_to_png(ffmpeg_dir: Path, src: Path, dest: Path) -> None:
+    ffmpeg = ffmpeg_dir / "ffmpeg.exe"
+    if not ffmpeg.is_file():
+        raise FileNotFoundError("ffmpeg.exe is missing.")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        [str(ffmpeg), "-y", "-i", str(src), str(dest)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=flags,
+    )
+    if result.returncode != 0 or not dest.is_file():
+        raise RuntimeError("Could not convert the thumbnail to PNG.")
+
+
+def download_youtube_thumbnail_fast(url: str, output_dir: Path, ffmpeg_dir: Path, log) -> Path | None:
+    video_id = youtube_id(url)
+    if not video_id:
+        return None
+    log("Fetching YouTube thumbnail…")
+    title_box: dict[str, str | None] = {"title": None}
+
+    def fetch_title() -> None:
+        title_box["title"] = youtube_oembed_title(video_id)
+
+    title_thread = threading.Thread(target=fetch_title, daemon=True)
+    title_thread.start()
+    with tempfile.TemporaryDirectory(prefix="ezdlp-thumb-") as raw:
+        tmp = Path(raw) / "thumb.jpg"
+        if not fetch_youtube_thumb_image(video_id, tmp):
+            return None
+        title_thread.join(timeout=5)
+        title = title_box["title"] or video_id
+        png_path = output_dir / f"{_safe_filename(title)} [{video_id}].png"
+        convert_image_to_png(ffmpeg_dir, tmp, png_path)
+    log(f"Thumbnail saved: {png_path}")
+    return png_path
 
 
 def parse_timestamp(raw: str) -> tuple[int | None, bool]:
@@ -341,14 +451,23 @@ def build_command(
         cmd.extend(["--cookies", str(cookies)])
     if shutil.which("node"):
         cmd.extend(["--js-runtimes", "node"])
-    if include_format:
+    if kind == "thumb":
+        cmd.extend(
+            [
+                "--skip-download",
+                "--write-thumbnail",
+                "--convert-thumbnails",
+                "png",
+            ]
+        )
+    elif include_format:
         if kind == "mp3":
             cmd.extend(
                 ["-x", "--audio-format", "mp3", "--audio-quality", "0", "-f", "ba/b", "--keep-video"]
             )
         else:
             cmd.extend(["-S", "vcodec:h264,fps,res,acodec:m4a"])
-    if section:
+    if section and kind != "thumb":
         cmd.extend(
             [
                 "--download-sections",
@@ -550,11 +669,11 @@ class App(tk.Tk):
             relief="flat",
             font=("Segoe UI", 11, "bold"),
             cursor="hand2",
-            padx=18,
+            padx=14,
             pady=10,
             command=lambda: self._start("mp4"),
         )
-        self.mp4_btn.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        self.mp4_btn.pack(side="left", expand=True, fill="x", padx=(0, 4))
         self.mp3_btn = HoverButton(
             btns,
             text="Download MP3",
@@ -565,11 +684,26 @@ class App(tk.Tk):
             relief="flat",
             font=("Segoe UI", 11, "bold"),
             cursor="hand2",
-            padx=18,
+            padx=14,
             pady=10,
             command=lambda: self._start("mp3"),
         )
-        self.mp3_btn.pack(side="left", expand=True, fill="x", padx=(6, 0))
+        self.mp3_btn.pack(side="left", expand=True, fill="x", padx=4)
+        self.thumb_btn = HoverButton(
+            btns,
+            text="Thumbnail",
+            bg=THUMB,
+            hover=THUMB_HOVER,
+            fg=BTN_FG,
+            activeforeground=BTN_FG,
+            relief="flat",
+            font=("Segoe UI", 11, "bold"),
+            cursor="hand2",
+            padx=14,
+            pady=10,
+            command=lambda: self._start("thumb"),
+        )
+        self.thumb_btn.pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         status_row = tk.Frame(pad, bg=BG)
         status_row.pack(fill="x", pady=(0, 6))
@@ -622,13 +756,16 @@ class App(tk.Tk):
         state = "disabled" if busy else "normal"
         self.mp4_btn.configure(state=state)
         self.mp3_btn.configure(state=state)
+        self.thumb_btn.configure(state=state)
         cursor = "watch" if busy else "hand2"
         if not busy:
             self.mp4_btn.configure(bg=MP4, cursor=cursor)
             self.mp3_btn.configure(bg=MP3, cursor=cursor)
+            self.thumb_btn.configure(bg=THUMB, cursor=cursor)
         else:
             self.mp4_btn.configure(cursor="arrow")
             self.mp3_btn.configure(cursor="arrow")
+            self.thumb_btn.configure(cursor="arrow")
 
     def _emit(self, kind: str, text: str) -> None:
         self.q.put((kind, text))
@@ -698,19 +835,43 @@ class App(tk.Tk):
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             save_output_dir(output_dir)
+            if kind == "thumb":
+                ffmpeg_dir = locate_ffmpeg_dir()
+                if ffmpeg_dir is None:
+                    _, ffmpeg_dir = ensure_tools(lambda msg: self._emit("log", msg))
+                try:
+                    fast = download_youtube_thumbnail_fast(
+                        url, output_dir, ffmpeg_dir, lambda msg: self._emit("log", msg)
+                    )
+                except Exception as exc:
+                    self._emit("log", f"Direct thumbnail fetch failed: {exc}")
+                    fast = None
+                if fast is not None:
+                    self._emit("status", f"{OK}|Done — saved to {output_dir}")
+                    return
+                self._emit("log", "Falling back to yt-dlp…")
+
             ytdlp, ffmpeg_dir = ensure_tools(lambda msg: self._emit("log", msg))
-            section, note = resolve_section(start_raw, end_raw)
-            if note:
-                self._emit("log", note)
+            section, note = (None, None)
+            if kind != "thumb":
+                section, note = resolve_section(start_raw, end_raw)
+                if note:
+                    self._emit("log", note)
             if kind == "mp3":
                 work_dir = Path(tempfile.mkdtemp(prefix="ezdlp-mp3-"))
             else:
                 work_dir = output_dir
-            if is_youtube(url):
+            if kind == "thumb":
+                attempts = [
+                    ("thumbnail", ["--impersonate", "chrome"], True, False),
+                    ("thumbnail", ["--impersonate", "chrome"], False, False),
+                ]
+            elif is_youtube(url):
                 attempts = youtube_attempts(kind)
             else:
                 attempts = [("default", [], True, True)]
 
+            pretty = {"mp4": "MP4", "mp3": "MP3", "thumb": "thumbnail"}.get(kind, kind)
             code = 1
             for index, (label, extra, use_cookies, include_format) in enumerate(attempts, start=1):
                 cmd = build_command(
@@ -727,7 +888,7 @@ class App(tk.Tk):
                 if len(attempts) > 1:
                     self._emit("log", f"— Attempt {index}/{len(attempts)}: {label}")
                 self._emit("log", " ".join(cmd))
-                self._emit("status", f"{ACCENT}|Downloading {kind.upper()} ({label})…")
+                self._emit("status", f"{ACCENT}|Downloading {pretty} ({label})…")
                 code = self._popen_ytdlp(cmd)
                 if code == 0:
                     break
