@@ -1,7 +1,7 @@
 # EZ-DLP
 
 Windows app to paste a media URL and download **MP4** or **MP3** with [yt-dlp](https://github.com/yt-dlp/yt-dlp).
-<img width="831" height="617" alt="image" src="https://github.com/user-attachments/assets/7a1aa985-f5c9-413a-a607-01bf035ca119" />
+<img width="821" height="608" alt="image" src="https://github.com/user-attachments/assets/98f01690-1224-4746-b58c-9e9913e0d692" />
 
 ## Install
 
