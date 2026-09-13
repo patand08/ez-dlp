@@ -1,5 +1,7 @@
 tools/
 cookies.txt
+**/cookies.txt
+**/cookies.sqlite
 config.json
 dist/
 build/

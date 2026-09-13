@@ -133,6 +133,44 @@ def find_cookies(ytdlp: Path) -> Path | None:
     return None
 
 
+# Names that only exist after a real YouTube/Google sign-in.
+_YOUTUBE_LOGIN_COOKIES = frozenset(
+    {
+        "LOGIN_INFO",
+        "SAPISID",
+        "APISID",
+        "SID",
+        "__Secure-1PSID",
+        "__Secure-1PAPISID",
+    }
+)
+
+
+def cookies_have_youtube_login(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 6:
+            continue
+        domain, name = parts[0], parts[5]
+        if name in _YOUTUBE_LOGIN_COOKIES and (
+            "youtube.com" in domain or "google.com" in domain
+        ):
+            return True
+    return False
+
+
+def copy_cookies_jar(src: Path, dest_dir: Path) -> Path:
+    dest = dest_dir / "cookies.txt"
+    shutil.copy2(src, dest)
+    return dest
+
+
 def locate_ffmpeg_dir() -> Path | None:
     local = tools_dir() / "ffmpeg.exe"
     if local.is_file():
@@ -426,7 +464,7 @@ def build_command(
     url: str,
     kind: str,
     extra: list[str] | None = None,
-    use_cookies: bool = True,
+    cookies: Path | None = None,
     include_format: bool = True,
     section: str | None = None,
 ) -> list[str]:
@@ -446,7 +484,6 @@ def build_command(
     ]
     if extra:
         cmd.extend(extra)
-    cookies = find_cookies(ytdlp) if use_cookies else None
     if cookies is not None:
         cmd.extend(["--cookies", str(cookies)])
     if shutil.which("node"):
@@ -466,7 +503,7 @@ def build_command(
                 ["-x", "--audio-format", "mp3", "--audio-quality", "0", "-f", "ba/b", "--keep-video"]
             )
         else:
-            cmd.extend(["-S", "vcodec:h264,fps,res,acodec:m4a"])
+            cmd.extend(["-f", "video+audio"])
     if section and kind != "thumb":
         cmd.extend(
             [
@@ -495,34 +532,31 @@ def move_outputs(src: Path, dest: Path, suffixes: tuple[str, ...]) -> list[Path]
 
 
 def youtube_attempts(_kind: str) -> list[tuple[str, list[str], bool, bool]]:
-    """(label, extra args, use_cookies, include default format flags)."""
+    """(label, extra args, use cookie file, include default format flags)."""
     return [
+        ("video+audio", [], True, True),
         (
-            "h264",
-            ["--impersonate", "chrome"],
-            True,
+            "Chrome login",
+            ["--cookies-from-browser", "chrome"],
+            False,
             True,
         ),
         (
+            "h264",
+            ["-S", "vcodec:h264,fps,res,acodec:m4a"],
+            True,
+            False,
+        ),
+        (
             "HLS",
-            [
-                "--impersonate",
-                "chrome",
-                "--extractor-args",
-                "youtube:player_client=web_safari,ios,tv",
-            ],
+            ["--extractor-args", "youtube:player_client=web_safari,ios,tv"],
             True,
             True,
         ),
         (
             "Android",
-            [
-                "--impersonate",
-                "chrome",
-                "--extractor-args",
-                "youtube:player_client=android",
-            ],
-            False,
+            ["--extractor-args", "youtube:player_client=android"],
+            True,
             True,
         ),
     ]
@@ -832,6 +866,7 @@ class App(tk.Tk):
 
     def _run(self, url: str, output_dir: Path, kind: str, start_raw: str, end_raw: str) -> None:
         work_dir: Path | None = None
+        cookie_dir: Path | None = None
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             save_output_dir(output_dir)
@@ -852,6 +887,27 @@ class App(tk.Tk):
                 self._emit("log", "Falling back to yt-dlp…")
 
             ytdlp, ffmpeg_dir = ensure_tools(lambda msg: self._emit("log", msg))
+            cookie_src = find_cookies(ytdlp)
+            cookie_jar: Path | None = None
+            if cookie_src is not None:
+                cookie_dir = Path(tempfile.mkdtemp(prefix="ezdlp-cookies-"))
+                cookie_jar = copy_cookies_jar(cookie_src, cookie_dir)
+                self._emit("log", f"Using cookies: {cookie_src}")
+                if cookies_have_youtube_login(cookie_src):
+                    self._emit("log", "YouTube login found in cookies.txt.")
+                else:
+                    self._emit(
+                        "log",
+                        "cookies.txt has no YouTube login (only visitor cookies). "
+                        "Age-restricted videos need a signed-in export, "
+                        "or Chrome open and signed into YouTube.",
+                    )
+            else:
+                self._emit(
+                    "log",
+                    "No cookies.txt found. Public videos still work; "
+                    "age-restricted ones need tools\\cookies.txt.",
+                )
             section, note = (None, None)
             if kind != "thumb":
                 section, note = resolve_section(start_raw, end_raw)
@@ -863,8 +919,8 @@ class App(tk.Tk):
                 work_dir = output_dir
             if kind == "thumb":
                 attempts = [
-                    ("thumbnail", ["--impersonate", "chrome"], True, False),
-                    ("thumbnail", ["--impersonate", "chrome"], False, False),
+                    ("thumbnail", [], True, False),
+                    ("thumbnail + Chrome", ["--cookies-from-browser", "chrome"], False, False),
                 ]
             elif is_youtube(url):
                 attempts = youtube_attempts(kind)
@@ -873,7 +929,7 @@ class App(tk.Tk):
 
             pretty = {"mp4": "MP4", "mp3": "MP3", "thumb": "thumbnail"}.get(kind, kind)
             code = 1
-            for index, (label, extra, use_cookies, include_format) in enumerate(attempts, start=1):
+            for index, (label, extra, use_cookie_file, include_format) in enumerate(attempts, start=1):
                 cmd = build_command(
                     ytdlp,
                     ffmpeg_dir,
@@ -881,7 +937,7 @@ class App(tk.Tk):
                     url,
                     kind,
                     extra=extra,
-                    use_cookies=use_cookies,
+                    cookies=cookie_jar if use_cookie_file else None,
                     include_format=include_format,
                     section=section,
                 )
@@ -907,16 +963,30 @@ class App(tk.Tk):
                 self._emit("status", f"{ERR}|Error (code {code})")
                 self._emit("log", f"yt-dlp exited with code {code}.")
                 if is_youtube(url):
-                    self._emit(
-                        "log",
-                        "Age-restricted videos need a fresh cookies.txt "
-                        "(Chrome, signed into YouTube, Get cookies.txt LOCALLY extension). "
-                        "Save it as tools\\cookies.txt.",
-                    )
+                    if cookie_src is None:
+                        hint = (
+                            "No cookies.txt. For age-restricted videos: in Chrome, "
+                            "signed into YouTube, export with Get cookies.txt LOCALLY "
+                            "and save as tools\\cookies.txt."
+                        )
+                    elif not cookies_have_youtube_login(cookie_src):
+                        hint = (
+                            "cookies.txt was used, but it is not a YouTube login. "
+                            "Re-export while signed into YouTube, or keep Chrome "
+                            "signed in (the app also reads Chrome directly)."
+                        )
+                    else:
+                        hint = (
+                            "YouTube still asked to sign in. Export a fresh "
+                            "cookies.txt while signed in and replace tools\\cookies.txt."
+                        )
+                    self._emit("log", hint)
         except Exception as exc:
             self._emit("status", f"{ERR}|Error")
             self._emit("log", str(exc))
         finally:
+            if cookie_dir is not None:
+                shutil.rmtree(cookie_dir, ignore_errors=True)
             if kind == "mp3" and work_dir is not None and work_dir != output_dir:
                 shutil.rmtree(work_dir, ignore_errors=True)
             self._emit("done", "")

@@ -64,16 +64,36 @@ Keep `EZ-DLP.exe` (or the unzipped folder) in a place you will not delete. If yo
 
 ---
 
-## Extra (only if you need it)
+## Cookies (age-restricted YouTube)
 
-### Age-restricted videos
+Public videos work with no extra file. Age-restricted videos need a **YouTube login** saved as `cookies.txt`.
 
-Normal public videos work with no extra file. For age-restricted YouTube:
+`cookies.txt` is a login. It is **gitignored** (`cookies.txt`, `**/cookies.txt`, and the whole `tools/` folder). Never commit it, never put it on GitHub, never send it to anyone.
 
-1. In Chrome, while signed into YouTube, export cookies with the extension **Get cookies.txt LOCALLY**.
-2. Save the file as `cookies.txt` in the same folder as the app, or inside `tools`.
+### 1. Install the extension
 
-Do not publish that file. It is a login.
+In Chrome, install **[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)**.
+
+Then open `chrome://extensions`, find that extension, and turn on **Allow in Incognito**. Without this, you cannot export from a private window.
+
+### 2. Export so YouTube does not rotate the cookies
+
+From the [official yt-dlp docs](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies): YouTube rotates account cookies on open YouTube tabs. To keep a file that still works with yt-dlp, export a session that is **never opened in the browser again**.
+
+1. Open a **new Incognito / private window** and log into YouTube there (not your everyday window).
+2. In **that same window and same tab**, go to `https://www.youtube.com/robots.txt`. This should be the **only** Incognito tab open.
+3. Click the **Get cookies.txt LOCALLY** icon → export **youtube.com** cookies.
+4. **Close the entire Incognito window** right after. Do not open YouTube again in that session.
+5. Rename the downloaded file to `cookies.txt`.
+6. Put it in `tools\cookies.txt` (next to `yt-dlp.exe`), or in the same folder as `EZ-DLP.exe` / `app.py`.
+
+Do **not** export from your normal Chrome window. Those cookies rotate and stop working. Do **not** use “copy cookies from the browser” to create this file — that copies the everyday session, not the Incognito one.
+
+If downloads start asking you to sign in again, repeat this export (the old file expired or was rotated).
+
+---
+
+## Extra
 
 ### If you already use Git
 
@@ -154,16 +174,36 @@ Deixe o `EZ-DLP.exe` (ou a pasta descompactada) num lugar que você não vá apa
 
 ---
 
-## Extra (só se precisar)
+## Cookies (YouTube com restrição de idade)
 
-### Vídeos com restrição de idade
+Vídeo público funciona sem arquivo extra. Vídeo com restrição de idade precisa de um **login do YouTube** salvo como `cookies.txt`.
 
-Vídeo público normal não precisa de nada extra. Para YouTube com restrição de idade:
+`cookies.txt` é um login. Ele está no **.gitignore** (`cookies.txt`, `**/cookies.txt` e a pasta `tools/` inteira). Nunca dê commit, nunca suba no GitHub, nunca mande esse arquivo para ninguém.
 
-1. No Chrome, logado no YouTube, exporte os cookies com a extensão **Get cookies.txt LOCALLY**.
-2. Salve o arquivo como `cookies.txt` na mesma pasta do app, ou dentro de `tools`.
+### 1. Instale a extensão
 
-Não publique esse arquivo. É um login.
+No Chrome, instale **[Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)**.
+
+Depois abra `chrome://extensions`, ache essa extensão e ligue **Permitir no modo de navegação anônima** / **Allow in Incognito**. Sem isso, não dá para exportar da janela anônima.
+
+### 2. Exporte de um jeito que o YouTube não gire os cookies
+
+Pela [documentação oficial do yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies): o YouTube gira os cookies da conta em abas abertas do YouTube. Para o arquivo continuar válido no yt-dlp, exporte uma sessão que **nunca seja aberta de novo no navegador**.
+
+1. Abra uma **janela anônima / Incognito nova** e entre no YouTube **ali** (não na janela do dia a dia).
+2. **Na mesma janela e na mesma aba**, vá em `https://www.youtube.com/robots.txt`. Essa deve ser a **única** aba anônima aberta.
+3. Clique no ícone **Get cookies.txt LOCALLY** → exporte os cookies de **youtube.com**.
+4. **Feche a janela anônima inteira** na hora. Não abra o YouTube de novo nessa sessão.
+5. Renomeie o arquivo baixado para `cookies.txt`.
+6. Coloque em `tools\cookies.txt` (ao lado do `yt-dlp.exe`), ou na mesma pasta do `EZ-DLP.exe` / `app.py`.
+
+**Não** exporte da janela normal do Chrome. Esses cookies giram e param de funcionar. **Não** use “copiar cookies do navegador” para criar esse arquivo — isso copia a sessão do dia a dia, não a anônima.
+
+Se o download voltar a pedir login, faça essa exportação de novo (o arquivo antigo expirou ou foi girado).
+
+---
+
+## Extra
 
 ### Se você já usa Git
 
