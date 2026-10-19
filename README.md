@@ -53,7 +53,7 @@ Keep `EZ-DLP.exe` (or the unzipped folder) in a place you will not delete. If yo
 ## How to use
 
 1. Paste the video link.
-2. Optionally type a **Rename file** name for the saved file (Windows rules apply: no `<>:"/\|?*`, no reserved names like `CON`). Leave it empty to keep the video title. If that name already exists in the folder, the app saves as `name_1`, `name_2`, and so on.
+2. Optionally type a **Rename file** name for the saved file. Invalid Windows characters (`<>:"/\|?*`) cannot be typed or pasted. Reserved names like `CON` are rejected when you download. Leave it empty to keep the video title. If that name already exists in the folder, the app saves as `name_1`, `name_2`, and so on.
 3. Check the save folder (default: your **Downloads** folder). The app remembers the last folder you pick.
 4. **Start** / **End** are optional (`1:30`, `01:30`, or `00:01:30`):
    - both empty → the whole video

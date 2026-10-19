@@ -242,14 +242,21 @@ def _safe_filename(name: str) -> str:
     return (cleaned[:180] or "thumbnail")
 
 
+def is_allowed_filename_char(char: str) -> bool:
+    return len(char) == 1 and char not in _WINDOWS_INVALID_CHARS and ord(char) >= 32
+
+
+def filter_windows_filename_chars(text: str) -> str:
+    """Drop characters Windows does not allow in a file name."""
+    return "".join(c for c in text if is_allowed_filename_char(c))
+
+
 def validate_windows_filename(raw: str) -> tuple[str | None, str | None]:
     """Return (stem, error). Empty input → (None, None) = keep yt-dlp default name."""
     text = (raw or "").strip()
     if not text:
         return None, None
-    if any(ord(c) < 32 for c in text):
-        return None, "The rename field cannot contain control characters."
-    if any(c in _WINDOWS_INVALID_CHARS for c in text):
+    if any(not is_allowed_filename_char(c) for c in text):
         return None, 'Windows filenames cannot include: < > : " / \\ | ? *'
     if text in (".", "..") or text.endswith(".") or text.endswith(" "):
         return None, "The file name cannot end with a space or a period."
@@ -743,6 +750,12 @@ class App(tk.Tk):
         ).pack(fill="x")
         self.rename_entry = self._entry(pad)
         self.rename_entry.pack(fill="x", pady=(4, 14), ipady=8)
+        rename_vcmd = (self.register(self._rename_key_ok), "%P")
+        self.rename_entry.configure(validate="key", validatecommand=rename_vcmd)
+        self.rename_entry.bind("<<Paste>>", self._rename_paste)
+        # Windows / some layouts also fire Control-v without <<Paste>> reliably.
+        self.rename_entry.bind("<Control-v>", self._rename_paste)
+        self.rename_entry.bind("<Control-V>", self._rename_paste)
 
         tk.Label(pad, text="Output folder", bg=BG, fg=MUTED, font=("Segoe UI", 9), anchor="w").pack(fill="x")
         row = tk.Frame(pad, bg=BG)
@@ -858,6 +871,30 @@ class App(tk.Tk):
         self.log.configure(yscrollcommand=scroll.set)
         self.log.pack(side="left", fill="both", expand=True, padx=8, pady=8)
         scroll.pack(side="right", fill="y")
+
+    def _rename_key_ok(self, proposed: str) -> bool:
+        """Block typing/pasting Windows-invalid filename characters into Rename."""
+        return all(is_allowed_filename_char(c) for c in proposed)
+
+    def _rename_paste(self, _event=None):
+        """Paste only characters allowed in a Windows file name."""
+        try:
+            text = self.clipboard_get()
+        except tk.TclError:
+            return "break"
+        cleaned = filter_windows_filename_chars(text)
+        entry = self.rename_entry
+        entry.configure(validate="none")
+        try:
+            try:
+                entry.delete("sel.first", "sel.last")
+            except tk.TclError:
+                pass
+            if cleaned:
+                entry.insert("insert", cleaned)
+        finally:
+            entry.configure(validate="key")
+        return "break"
 
     def _browse(self) -> None:
         current = self.output_var.get().strip() or str(factory_output_dir())
