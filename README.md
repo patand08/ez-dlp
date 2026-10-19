@@ -2,7 +2,7 @@
 
 Windows app: paste a link and download **MP4**, **MP3**, or a **thumbnail** with [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
-<img width="821" height="608" alt="EZ-DLP window" src="https://github.com/user-attachments/assets/98f01690-1224-4746-b58c-9e9913e0d692" />
+<img width="813" height="610" alt="{A94FBA9B-0DE1-4F6A-BF8A-83959A8FD20F}" src="https://github.com/user-attachments/assets/c7e308de-1d2c-40b8-aef3-e6a5b94f05fd" />
 
 You do **not** need Git. You do **not** need to know how to program.
 
