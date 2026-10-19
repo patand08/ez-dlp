@@ -221,9 +221,63 @@ def youtube_id(url: str) -> str | None:
     return None
 
 
+_WINDOWS_INVALID_CHARS = frozenset('<>:"/\\|?*')
+_WINDOWS_RESERVED = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(10)),
+        *(f"LPT{i}" for i in range(10)),
+    }
+)
+_KNOWN_MEDIA_EXTS = frozenset(
+    {".mp4", ".mp3", ".png", ".jpg", ".jpeg", ".webp", ".mkv", ".webm", ".m4a", ".m4v"}
+)
+
+
 def _safe_filename(name: str) -> str:
-    cleaned = "".join("_" if c in '<>:"/\\|?*' else c for c in name).strip(" .")
+    cleaned = "".join("_" if c in _WINDOWS_INVALID_CHARS else c for c in name).strip(" .")
     return (cleaned[:180] or "thumbnail")
+
+
+def validate_windows_filename(raw: str) -> tuple[str | None, str | None]:
+    """Return (stem, error). Empty input → (None, None) = keep yt-dlp default name."""
+    text = (raw or "").strip()
+    if not text:
+        return None, None
+    if any(ord(c) < 32 for c in text):
+        return None, "The rename field cannot contain control characters."
+    if any(c in _WINDOWS_INVALID_CHARS for c in text):
+        return None, 'Windows filenames cannot include: < > : " / \\ | ? *'
+    if text in (".", "..") or text.endswith(".") or text.endswith(" "):
+        return None, "The file name cannot end with a space or a period."
+    path = Path(text)
+    stem = path.stem if path.suffix.lower() in _KNOWN_MEDIA_EXTS else text
+    stem = stem.strip(" .")
+    if not stem:
+        return None, "Enter a valid file name."
+    if stem.upper() in _WINDOWS_RESERVED or Path(stem).stem.upper() in _WINDOWS_RESERVED:
+        return None, f'"{stem}" is a reserved Windows name. Choose another.'
+    if len(stem) > 180:
+        return None, "The file name is too long (max 180 characters)."
+    return stem, None
+
+
+def unique_destination(folder: Path, stem: str, suffix: str) -> Path:
+    """Pick folder/stem.ext, or stem_1.ext, stem_2.ext, … if the name is taken."""
+    folder.mkdir(parents=True, exist_ok=True)
+    ext = suffix if suffix.startswith(".") else f".{suffix}"
+    candidate = folder / f"{stem}{ext}"
+    if not candidate.exists():
+        return candidate
+    n = 1
+    while True:
+        candidate = folder / f"{stem}_{n}{ext}"
+        if not candidate.exists():
+            return candidate
+        n += 1
 
 
 def youtube_oembed_title(video_id: str) -> str | None:
@@ -282,7 +336,13 @@ def convert_image_to_png(ffmpeg_dir: Path, src: Path, dest: Path) -> None:
         raise RuntimeError("Could not convert the thumbnail to PNG.")
 
 
-def download_youtube_thumbnail_fast(url: str, output_dir: Path, ffmpeg_dir: Path, log) -> Path | None:
+def download_youtube_thumbnail_fast(
+    url: str,
+    output_dir: Path,
+    ffmpeg_dir: Path,
+    log,
+    rename_stem: str | None = None,
+) -> Path | None:
     video_id = youtube_id(url)
     if not video_id:
         return None
@@ -299,8 +359,13 @@ def download_youtube_thumbnail_fast(url: str, output_dir: Path, ffmpeg_dir: Path
         if not fetch_youtube_thumb_image(video_id, tmp):
             return None
         title_thread.join(timeout=5)
-        title = title_box["title"] or video_id
-        png_path = output_dir / f"{_safe_filename(title)} [{video_id}].png"
+        if rename_stem:
+            png_path = unique_destination(output_dir, rename_stem, ".png")
+        else:
+            title = title_box["title"] or video_id
+            png_path = unique_destination(
+                output_dir, f"{_safe_filename(title)} [{video_id}]", ".png"
+            )
         convert_image_to_png(ffmpeg_dir, tmp, png_path)
     log(f"Thumbnail saved: {png_path}")
     return png_path
@@ -467,6 +532,7 @@ def build_command(
     cookies: Path | None = None,
     include_format: bool = True,
     section: str | None = None,
+    outtmpl: str | None = None,
 ) -> list[str]:
     cmd = [
         str(ytdlp),
@@ -505,28 +571,38 @@ def build_command(
         else:
             cmd.extend(["-f", "video+audio"])
     if section and kind != "thumb":
+        cmd.extend(["--download-sections", section])
+    if outtmpl:
+        cmd.extend(["-o", outtmpl])
+    elif section and kind != "thumb":
         cmd.extend(
-            [
-                "--download-sections",
-                section,
-                "-o",
-                "%(title)s [%(id)s] %(section_start)s-%(section_end)s.%(ext)s",
-            ]
+            ["-o", "%(title)s [%(id)s] %(section_start)s-%(section_end)s.%(ext)s"]
         )
     cmd.append(url)
     return cmd
 
 
-def move_outputs(src: Path, dest: Path, suffixes: tuple[str, ...]) -> list[Path]:
+def move_outputs(
+    src: Path,
+    dest: Path,
+    suffixes: tuple[str, ...],
+    rename_stem: str | None = None,
+) -> list[Path]:
     dest.mkdir(parents=True, exist_ok=True)
     moved: list[Path] = []
-    for path in src.rglob("*"):
+    for path in sorted(src.rglob("*")):
         if not path.is_file() or path.suffix.lower() not in suffixes:
             continue
-        target = dest / path.name
-        if target.exists():
-            target.unlink()
-        shutil.move(str(path), str(target))
+        if rename_stem:
+            target = unique_destination(dest, rename_stem, path.suffix.lower())
+        else:
+            target = dest / path.name
+            if target.exists() and target.resolve() != path.resolve():
+                target.unlink()
+        if path.resolve() != target.resolve():
+            shutil.move(str(path), str(target))
+        else:
+            target = path
         moved.append(target)
     return moved
 
@@ -576,8 +652,8 @@ class App(tk.Tk):
         super().__init__()
         self.title("EZ-DLP")
         self.configure(bg=BG)
-        self.minsize(720, 520)
-        self.geometry("820x580")
+        self.minsize(720, 560)
+        self.geometry("820x620")
         self._wm_icon = load_photo("icon-32.png", self)
         if self._wm_icon is not None:
             try:
@@ -656,6 +732,17 @@ class App(tk.Tk):
         self.end_entry = self._entry(link_row, width=10)
         self.end_entry.pack(side="left", padx=(8, 0), ipady=8)
         self.url_entry.focus_set()
+
+        tk.Label(
+            pad,
+            text="Rename file (optional)",
+            bg=BG,
+            fg=MUTED,
+            font=("Segoe UI", 9),
+            anchor="w",
+        ).pack(fill="x")
+        self.rename_entry = self._entry(pad)
+        self.rename_entry.pack(fill="x", pady=(4, 14), ipady=8)
 
         tk.Label(pad, text="Output folder", bg=BG, fg=MUTED, font=("Segoe UI", 9), anchor="w").pack(fill="x")
         row = tk.Frame(pad, bg=BG)
@@ -833,13 +920,25 @@ class App(tk.Tk):
             messagebox.showwarning("EZ-DLP", "Paste a link first.")
             self.url_entry.focus_set()
             return
+        rename_stem, rename_err = validate_windows_filename(self.rename_entry.get())
+        if rename_err:
+            messagebox.showwarning("EZ-DLP", rename_err)
+            self.rename_entry.focus_set()
+            return
         self._persist_output()
         out = Path(self.output_var.get().strip() or str(factory_output_dir()))
         self._set_busy(True)
         self._emit("status", f"{ACCENT}|Preparing…")
         threading.Thread(
             target=self._run,
-            args=(url, out, kind, self.start_entry.get(), self.end_entry.get()),
+            args=(
+                url,
+                out,
+                kind,
+                self.start_entry.get(),
+                self.end_entry.get(),
+                rename_stem,
+            ),
             daemon=True,
         ).start()
 
@@ -864,9 +963,18 @@ class App(tk.Tk):
                 self._emit("log", line)
         return proc.wait()
 
-    def _run(self, url: str, output_dir: Path, kind: str, start_raw: str, end_raw: str) -> None:
+    def _run(
+        self,
+        url: str,
+        output_dir: Path,
+        kind: str,
+        start_raw: str,
+        end_raw: str,
+        rename_stem: str | None = None,
+    ) -> None:
         work_dir: Path | None = None
         cookie_dir: Path | None = None
+        staged = False
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             save_output_dir(output_dir)
@@ -876,7 +984,11 @@ class App(tk.Tk):
                     _, ffmpeg_dir = ensure_tools(lambda msg: self._emit("log", msg))
                 try:
                     fast = download_youtube_thumbnail_fast(
-                        url, output_dir, ffmpeg_dir, lambda msg: self._emit("log", msg)
+                        url,
+                        output_dir,
+                        ffmpeg_dir,
+                        lambda msg: self._emit("log", msg),
+                        rename_stem=rename_stem,
                     )
                 except Exception as exc:
                     self._emit("log", f"Direct thumbnail fetch failed: {exc}")
@@ -913,10 +1025,16 @@ class App(tk.Tk):
                 section, note = resolve_section(start_raw, end_raw)
                 if note:
                     self._emit("log", note)
-            if kind == "mp3":
-                work_dir = Path(tempfile.mkdtemp(prefix="ezdlp-mp3-"))
+            if rename_stem:
+                self._emit("log", f"Rename to: {rename_stem}")
+            # Stage in a temp folder when renaming (or always for MP3) so we can
+            # apply a unique final name without clobbering existing files.
+            if kind == "mp3" or rename_stem:
+                work_dir = Path(tempfile.mkdtemp(prefix="ezdlp-out-"))
+                staged = True
             else:
                 work_dir = output_dir
+            outtmpl = f"{rename_stem}.%(ext)s" if rename_stem else None
             if kind == "thumb":
                 attempts = [
                     ("thumbnail", [], True, False),
@@ -940,6 +1058,7 @@ class App(tk.Tk):
                     cookies=cookie_jar if use_cookie_file else None,
                     include_format=include_format,
                     section=section,
+                    outtmpl=outtmpl,
                 )
                 if len(attempts) > 1:
                     self._emit("log", f"— Attempt {index}/{len(attempts)}: {label}")
@@ -952,11 +1071,21 @@ class App(tk.Tk):
                     self._emit("log", f"Failed (code {code}). Trying another method…")
 
             if code == 0:
-                if kind == "mp3" and work_dir != output_dir:
-                    moved = move_outputs(work_dir, output_dir, (".mp3",))
+                if staged and work_dir is not None:
+                    if kind == "mp3":
+                        suffixes = (".mp3",)
+                    elif kind == "thumb":
+                        suffixes = (".png", ".jpg", ".jpeg", ".webp")
+                    else:
+                        suffixes = (".mp4", ".mkv", ".webm", ".m4v", ".mov")
+                    moved = move_outputs(
+                        work_dir, output_dir, suffixes, rename_stem=rename_stem
+                    )
                     if not moved:
-                        raise RuntimeError("The MP3 was created, but the final file was not found.")
-                    self._emit("log", f"MP3 saved: {moved[0]}")
+                        raise RuntimeError(
+                            f"The {pretty} was created, but the final file was not found."
+                        )
+                    self._emit("log", f"Saved as: {moved[0].name}")
                 self._emit("status", f"{OK}|Done — saved to {output_dir}")
                 self._emit("log", f"Done. File saved to: {output_dir}")
             else:
@@ -987,7 +1116,7 @@ class App(tk.Tk):
         finally:
             if cookie_dir is not None:
                 shutil.rmtree(cookie_dir, ignore_errors=True)
-            if kind == "mp3" and work_dir is not None and work_dir != output_dir:
+            if staged and work_dir is not None:
                 shutil.rmtree(work_dir, ignore_errors=True)
             self._emit("done", "")
 
